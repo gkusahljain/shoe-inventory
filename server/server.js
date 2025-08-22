@@ -7,12 +7,18 @@ const Shoe = require("./models/Shoe");
 const app = express();
 
 // tighter CORS in production: set CLIENT_ORIGIN in .env to your frontend URL
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
-  })
-);
-app.use(express.json());
+const allowed = [
+  "http://localhost:5173",
+  process.env.CLIENT_ORIGIN, // e.g., https://your-frontend.vercel.app
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowed.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"));
+  },
+}));
+
 
 // DB connect
 mongoose
