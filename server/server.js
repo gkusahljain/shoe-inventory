@@ -1,43 +1,37 @@
-// server/server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
-import dotenv from "dotenv";
-
+import "dotenv/config.js";
 import Shoe from "./models/Shoe.js";
-import Sale from "./models/Sale.js";
-
-dotenv.config();
 
 const app = express();
 
-// CORS — allow localhost and your frontend URL
-const allowed = [
-  "http://localhost:5173",
-  process.env.CLIENT_ORIGIN // e.g. https://shoe-inventory-frontend.vercel.app
-].filter(Boolean);
-
+// ----- CORS -----
+const allowed = [ "http://localhost:5173", process.env.CLIENT_ORIGIN ].filter(Boolean);
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin || allowed.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"));
-    }
+    },
+    credentials: true
   })
 );
+
+// ----- Body -----
 app.use(express.json());
 
-// DB connect
+// ----- DB -----
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("MongoDB error:", err.message));
 
-// ------------------ ROUTES ------------------ //
+// ----- Routes -----
 
-// GET all shoes (optional search ?q=)
+// List shoes (supports ?q= search)
 app.get("/api/shoes", async (req, res) => {
-  const q = (req.query.q || "").trim();
+  const q = req.query.q?.trim();
   const filter = q
     ? {
         $or: [
@@ -52,168 +46,84 @@ app.get("/api/shoes", async (req, res) => {
   res.json(shoes);
 });
 
-// Create new shoe
+// Create shoe
 app.post("/api/shoes", async (req, res) => {
   try {
-    const payload = {
-      brand: req.body.brand,
-      type: req.body.type,
-      party: req.body.party,
-      buyingPrice: Number(req.body.buyingPrice),
-      description: req.body.description || "",
-      quantity: Number(req.body.quantity),
-      size: Number(req.body.size),
-      defaultSellingPrice: Number(req.body.sellingPrice)
-    };
-    const created = await Shoe.create(payload);
-    res.status(201).json(created);
+    const shoe = await Shoe.create(req.body);
+    res.status(201).json(shoe);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
 
-// Update a shoe (edit)
+// Update shoe
 app.put("/api/shoes/:id", async (req, res) => {
-  const updated = await Shoe.findByIdAndUpdate(req.params.id, req.body, {
-    new: true
-  });
-  res.json(updated);
+  try {
+    const updated = await Shoe.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
 });
 
-// Delete a shoe
+// Sell (qty + variable price + optional customer)
+app.patch("/api/shoes/:id/sell", async (req, res) => {
+  try {
+    const { qty = 1, price, customer = "" } = req.body;
+    const q = Number(qty);
+    const p = Number(price);
+    if (!Number.isFinite(q) || q <= 0) return res.status(400).json({ message: "Invalid qty" });
+    if (!Number.isFinite(p) || p < 0) return res.status(400).json({ message: "Invalid price" });
+
+    const shoe = await Shoe.findById(req.params.id);
+    if (!shoe) return res.status(404).json({ message: "Not found" });
+    if ((shoe.quantity || 0) < q) return res.status(400).json({ message: "Not enough stock" });
+
+    shoe.quantity = shoe.quantity - q;
+    shoe.salesHistory.push({ qty: q, price: p, customer });
+    await shoe.save();
+
+    res.json(shoe);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Delete shoe
 app.delete("/api/shoes/:id", async (req, res) => {
   await Shoe.findByIdAndDelete(req.params.id);
   res.json({ ok: true });
 });
 
-// Sell shoe (dynamic price per sale)
-app.patch("/api/shoes/:id/sell", async (req, res) => {
-  try {
-    const { qty = 1, sellingPrice } = req.body;
-    const nQty = Math.max(1, Number(qty));
-    const nSell = Number(sellingPrice);
-
-    if (Number.isNaN(nSell) || nSell < 0)
-      return res.status(400).json({ message: "Invalid selling price" });
-
-    const shoe = await Shoe.findById(req.params.id);
-    if (!shoe) return res.status(404).json({ message: "Not found" });
-
-    if ((shoe.quantity || 0) < nQty)
-      return res.status(400).json({ message: "Not enough stock" });
-
-    // update stock and sold count
-    shoe.quantity = (shoe.quantity || 0) - nQty;
-    shoe.sold = (shoe.sold || 0) + nQty;
-
-    // record sale + profit
-    const profit = (nSell - shoe.buyingPrice) * nQty;
-    await Sale.create({
-      shoe: shoe._id,
-      qty: nQty,
-      sellingPrice: nSell,
-      buyingPriceAtSale: shoe.buyingPrice,
-      profit
-    });
-
-    await shoe.save();
-    res.json(shoe);
-  } catch (e) {
-    res.status(400).json({ message: e.message });
-  }
+// Get sales history for a shoe
+app.get("/api/shoes/:id/sales", async (req, res) => {
+  const shoe = await Shoe.findById(req.params.id).select("brand type salesHistory size");
+  if (!shoe) return res.status(404).json({ message: "Not found" });
+  res.json(shoe.salesHistory);
 });
 
-// Restock shoe (add stock, optional update buying price)
-app.patch("/api/shoes/:id/restock", async (req, res) => {
-  try {
-    const { qty = 1, buyingPrice } = req.body;
-    const nQty = Math.max(1, Number(qty));
-
-    const shoe = await Shoe.findById(req.params.id);
-    if (!shoe) return res.status(404).json({ message: "Not found" });
-
-    shoe.quantity = (shoe.quantity || 0) + nQty;
-
-    if (buyingPrice !== undefined && buyingPrice !== "") {
-      const nBuy = Number(buyingPrice);
-      if (!Number.isNaN(nBuy) && nBuy >= 0) shoe.buyingPrice = nBuy;
-    }
-
-    await shoe.save();
-    res.json(shoe);
-  } catch (e) {
-    res.status(400).json({ message: e.message });
-  }
+// Get ALL sales (for CSV export / reports)
+app.get("/api/sales", async (_req, res) => {
+  const rows = await Shoe.aggregate([
+    { $unwind: "$salesHistory" },
+    {
+      $project: {
+        brand: 1,
+        type: 1,
+        size: 1,
+        saleDate: "$salesHistory.createdAt",
+        qty: "$salesHistory.qty",
+        price: "$salesHistory.price",
+        customer: "$salesHistory.customer"
+      }
+    },
+    { $sort: { saleDate: -1 } }
+  ]);
+  res.json(rows);
 });
 
-// Total profit
-app.get("/api/profit", async (req, res) => {
-  const { range } = req.query; // today | week | month | all
-  let from = null;
-  const now = new Date();
-
-  if (range === "today") {
-    from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  } else if (range === "week") {
-    const day = now.getDay();
-    from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
-  } else if (range === "month") {
-    from = new Date(now.getFullYear(), now.getMonth(), 1);
-  }
-
-  const filter = from ? { createdAt: { $gte: from } } : {};
-  const sales = await Sale.find(filter);
-  const totalProfit = sales.reduce((s, x) => s + (x.profit || 0), 0);
-  res.json({ totalProfit });
-});
-
-// Sales list
-app.get("/api/sales", async (req, res) => {
-  const { range } = req.query;
-  let from = null;
-  const now = new Date();
-
-  if (range === "today") {
-    from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  } else if (range === "week") {
-    const day = now.getDay();
-    from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
-  } else if (range === "month") {
-    from = new Date(now.getFullYear(), now.getMonth(), 1);
-  }
-
-  const filter = from ? { createdAt: { $gte: from } } : {};
-  const sales = await Sale.find(filter).populate("shoe").sort({ createdAt: -1 });
-  res.json(sales);
-});
-
-// Export sales to CSV
-app.get("/api/export/sales.csv", async (req, res) => {
-  const sales = await Sale.find().populate("shoe").sort({ createdAt: -1 });
-  const header = "Date,Brand,Type,Party,Size,Qty,BuyingPrice,SellingPrice,Profit\n";
-  const lines = sales.map((s) => {
-    const d = new Date(s.createdAt).toISOString();
-    const brand = s.shoe?.brand || "";
-    const type = s.shoe?.type || "";
-    const party = s.shoe?.party || "";
-    const size = s.shoe?.size || "";
-    return [
-      d,
-      brand,
-      type,
-      party,
-      size,
-      s.qty,
-      s.buyingPriceAtSale,
-      s.sellingPrice,
-      s.profit
-    ].join(",");
-  });
-  res.setHeader("Content-Type", "text/csv");
-  res.send(header + lines.join("\n"));
-});
+// Health
+app.get("/", (_req, res) => res.send("API OK ✔️"));
 
 const port = process.env.PORT || 5000;
-app.listen(port, () =>
-  console.log(`✅ API running at http://localhost:${port}`)
-);
+app.listen(port, () => console.log(`✅ API running at http://localhost:${port}`));
