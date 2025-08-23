@@ -1,14 +1,17 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const cors = require("cors");
-require("dotenv").config();
+// server/server.js
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
 
-const Shoe = require("./models/Shoe");
-const Sale = require("./models/Sale");
+import Shoe from "./models/Shoe.js";
+import Sale from "./models/Sale.js";
+
+dotenv.config();
 
 const app = express();
 
-// CORS — allow localhost and your Vercel URL from env
+// CORS — allow localhost and your frontend URL
 const allowed = [
   "http://localhost:5173",
   process.env.CLIENT_ORIGIN // e.g. https://shoe-inventory-frontend.vercel.app
@@ -69,7 +72,7 @@ app.post("/api/shoes", async (req, res) => {
   }
 });
 
-// Update a shoe (full/partial)
+// Update a shoe (edit)
 app.put("/api/shoes/:id", async (req, res) => {
   const updated = await Shoe.findByIdAndUpdate(req.params.id, req.body, {
     new: true
@@ -103,7 +106,7 @@ app.patch("/api/shoes/:id/sell", async (req, res) => {
     shoe.quantity = (shoe.quantity || 0) - nQty;
     shoe.sold = (shoe.sold || 0) + nQty;
 
-    // record sale
+    // record sale + profit
     const profit = (nSell - shoe.buyingPrice) * nQty;
     await Sale.create({
       shoe: shoe._id,
@@ -120,7 +123,7 @@ app.patch("/api/shoes/:id/sell", async (req, res) => {
   }
 });
 
-// Restock shoe (add quantity, optional update buying price)
+// Restock shoe (add stock, optional update buying price)
 app.patch("/api/shoes/:id/restock", async (req, res) => {
   try {
     const { qty = 1, buyingPrice } = req.body;
@@ -131,7 +134,6 @@ app.patch("/api/shoes/:id/restock", async (req, res) => {
 
     shoe.quantity = (shoe.quantity || 0) + nQty;
 
-    // optionally update buying price if you want to set a new baseline
     if (buyingPrice !== undefined && buyingPrice !== "") {
       const nBuy = Number(buyingPrice);
       if (!Number.isNaN(nBuy) && nBuy >= 0) shoe.buyingPrice = nBuy;
@@ -144,16 +146,16 @@ app.patch("/api/shoes/:id/restock", async (req, res) => {
   }
 });
 
-// Total profit (all time) from sales collection
+// Total profit
 app.get("/api/profit", async (req, res) => {
-  const { range } = req.query; // today | week | month | all (default all)
+  const { range } = req.query; // today | week | month | all
   let from = null;
-
   const now = new Date();
+
   if (range === "today") {
     from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   } else if (range === "week") {
-    const day = now.getDay(); // 0..6
+    const day = now.getDay();
     from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
   } else if (range === "month") {
     from = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -165,7 +167,7 @@ app.get("/api/profit", async (req, res) => {
   res.json({ totalProfit });
 });
 
-// Sales list (optionally range filter)
+// Sales list
 app.get("/api/sales", async (req, res) => {
   const { range } = req.query;
   let from = null;
@@ -185,7 +187,7 @@ app.get("/api/sales", async (req, res) => {
   res.json(sales);
 });
 
-// CSV export
+// Export sales to CSV
 app.get("/api/export/sales.csv", async (req, res) => {
   const sales = await Sale.find().populate("shoe").sort({ createdAt: -1 });
   const header = "Date,Brand,Type,Party,Size,Qty,BuyingPrice,SellingPrice,Profit\n";

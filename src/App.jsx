@@ -13,7 +13,7 @@ export default function App() {
     description: "",
     quantity: "",
     size: "6",
-    sellingPrice: "" // default selling price suggestion
+    defaultSellingPrice: "" // ✅ renamed to match backend
   });
   const [profit, setProfit] = useState(0);
   const LOW_STOCK = 5;
@@ -43,7 +43,7 @@ export default function App() {
       description: form.description.trim(),
       quantity: Number(form.quantity),
       size: Number(form.size),
-      sellingPrice: Number(form.sellingPrice)
+      defaultSellingPrice: Number(form.defaultSellingPrice) // ✅ fixed key
     };
     const res = await fetch(`${API}/shoes`, {
       method: "POST",
@@ -51,7 +51,8 @@ export default function App() {
       body: JSON.stringify(payload)
     });
     if (!res.ok) {
-      alert("Failed to add shoe");
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "Failed to add shoe");
       return;
     }
     setForm({
@@ -62,7 +63,7 @@ export default function App() {
       description: "",
       quantity: "",
       size: "6",
-      sellingPrice: ""
+      defaultSellingPrice: ""
     });
     loadAll();
   };
@@ -159,7 +160,7 @@ export default function App() {
         <StatCard label="Total Profit (all time)" value={`₹${profit}`} />
         <StatCard
           label="Low Stock Items"
-          value={inventory.filter((i) => (i.quantity || 0) < 5).length}
+          value={inventory.filter((i) => (i.quantity || 0) < LOW_STOCK).length}
         />
         <a
           href={`${API}/export/sales.csv`}
@@ -218,10 +219,10 @@ export default function App() {
           <option value="10">10</option>
         </select>
         <input
-          name="sellingPrice"
+          name="defaultSellingPrice"
           type="number"
           placeholder="Default Selling Price"
-          value={form.sellingPrice}
+          value={form.defaultSellingPrice}
           onChange={handleChange}
         />
         <button type="submit" style={{ gridColumn: "span 4" }}>Add Product</button>
@@ -250,7 +251,7 @@ export default function App() {
             <th>Qty</th>
             <th>Size</th>
             <th>Default Selling</th>
-            <th>Sold</th>
+            <th>Total Profit</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -270,7 +271,7 @@ export default function App() {
                 </td>
                 <td>{item.size}</td>
                 <td>₹{item.defaultSellingPrice}</td>
-                <td>{item.sold || 0}</td>
+                <td>₹{item.totalProfit || 0}</td>
                 <td>
                   {!soldOut ? (
                     <button onClick={() => sell(item._id, item.defaultSellingPrice)}>Sell</button>
