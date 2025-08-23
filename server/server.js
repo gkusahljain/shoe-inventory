@@ -1,105 +1,87 @@
-import express from "express";
-import mongoose from "mongoose";
-import cors from "cors";
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+require("dotenv").config();
 
+const Shoe = require("./models/Shoe");
 const app = express();
-app.use(cors());
+
+/* -------- CORS (allow localhost + your Vercel URL) -------- */
+const allowed = [
+  "http://localhost:5173",
+  process.env.CLIENT_ORIGIN, // e.g. https://shoe-inventory-mu.vercel.app
+]
+  .filter(Boolean)
+  .map((u) => u.replace(/\/$/, "")); // strip trailing slash if present
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // health checks/curl
+      const o = origin.replace(/\/$/, "");
+      return allowed.includes(o) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+/* -------- IMPORTANT: parse JSON bodies -------- */
 app.use(express.json());
 
-// ✅ Connect MongoDB
-mongoose.connect("mongodb://127.0.0.1:27017/shoe_inventory", {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+/* Optional health check */
+app.get("/", (_, res) => res.json({ ok: true }));
+
+/* -------- DB connect -------- */
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("MongoDB error:", err.message));
+
+/* -------- Routes -------- */
+app.get("/api/shoes", async (req, res) => {
+  const q = req.query.q?.trim();
+  const filter = q
+    ? {
+        $or: [
+          { brand: new RegExp(q, "i") },
+          { type: new RegExp(q, "i") },
+          { party: new RegExp(q, "i") },
+          { description: new RegExp(q, "i") },
+        ],
+      }
+    : {};
+  const shoes = await Shoe.find(filter).sort({ createdAt: -1 });
+  res.json(shoes);
 });
 
-// ✅ Shoe Schema
-const ShoeSchema = new mongoose.Schema({
-  brand: String,
-  type: String,
-  partyName: String,
-  buyingPrice: Number,
-  sellingPrice: Number, // default reference selling price
-  size: String,
-  quantity: Number,
-  description: String,
-});
-const Shoe = mongoose.model("Shoe", ShoeSchema);
-
-// ✅ Sales Schema
-const SaleSchema = new mongoose.Schema({
-  shoeId: { type: mongoose.Schema.Types.ObjectId, ref: "Shoe" },
-  brand: String,
-  type: String,
-  customer: String,
-  quantity: Number,
-  buyingPrice: Number,
-  sellingPrice: Number, // actual selling price
-  profit: Number,
-  date: { type: Date, default: Date.now },
-});
-const Sale = mongoose.model("Sale", SaleSchema);
-
-// ================= API ROUTES =================
-
-// Add new shoe
 app.post("/api/shoes", async (req, res) => {
-  const shoe = new Shoe(req.body);
+  try {
+    const shoe = await Shoe.create(req.body);
+    res.status(201).json(shoe);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+app.put("/api/shoes/:id", async (req, res) => {
+  const updated = await Shoe.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  res.json(updated);
+});
+
+app.patch("/api/shoes/:id/sell", async (req, res) => {
+  const { qty = 1 } = req.body;
+  const shoe = await Shoe.findById(req.params.id);
+  if (!shoe) return res.status(404).json({ message: "Not found" });
+  shoe.quantity = Math.max(0, (shoe.quantity || 0) - Number(qty));
   await shoe.save();
   res.json(shoe);
 });
 
-// Get all shoes
-app.get("/api/shoes", async (req, res) => {
-  const shoes = await Shoe.find();
-  res.json(shoes);
+app.delete("/api/shoes/:id", async (req, res) => {
+  await Shoe.findByIdAndDelete(req.params.id);
+  res.json({ ok: true });
 });
 
-// Sell shoe
-app.post("/api/sell/:id", async (req, res) => {
-  const { id } = req.params;
-  const { quantity, sellingPrice, customer } = req.body;
-
-  const shoe = await Shoe.findById(id);
-  if (!shoe) return res.status(404).json({ error: "Shoe not found" });
-
-  if (shoe.quantity < quantity) {
-    return res.status(400).json({ error: "Not enough stock" });
-  }
-
-  // reduce stock
-  shoe.quantity -= quantity;
-  await shoe.save();
-
-  // calculate profit
-  const profit = (sellingPrice - shoe.buyingPrice) * quantity;
-
-  // save sale record
-  const sale = new Sale({
-    shoeId: shoe._id,
-    brand: shoe.brand,
-    type: shoe.type,
-    customer,
-    quantity,
-    buyingPrice: shoe.buyingPrice,
-    sellingPrice,
-    profit,
-  });
-  await sale.save();
-
-  res.json({ message: "Sale recorded", sale });
-});
-
-// Get sales history
-app.get("/api/sales", async (req, res) => {
-  const sales = await Sale.find().sort({ date: -1 });
-  res.json(sales);
-});
-
-// Get total profit
-app.get("/api/profit", async (req, res) => {
-  const sales = await Sale.find();
-  const totalProfit = sales.reduce((acc, s) => acc + s.profit, 0);
-  res.json({ totalProfit });
-});
-
-app.listen(5000, () => console.log("Server running on port 5000"));
+const port = process.env.PORT || 5000;
+app.listen(port, () => console.log(`✅ API running at http://localhost:${port}`));
