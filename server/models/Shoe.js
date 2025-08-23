@@ -1,27 +1,18 @@
-import mongoose from "mongoose";
-
-const SaleSchema = new mongoose.Schema(
-  {
-    qty: { type: Number, required: true, min: 1 },
-    price: { type: Number, required: true, min: 0 }, // per-sale selling price
-    customer: { type: String, default: "" }
-  },
-  { timestamps: true }
-);
+const mongoose = require("mongoose");
 
 const ShoeSchema = new mongoose.Schema(
   {
     brand: { type: String, required: true },
     type: { type: String, required: true },
     party: { type: String, required: true },
-    buyingPrice: { type: Number, required: true },
+    buyingPrice: { type: Number, required: true, min: 0 },
     description: { type: String, default: "" },
     quantity: { type: Number, required: true, min: 0 },
     size: { type: Number, required: true },
-    sellingPrice: { type: Number, required: true }, // default/target price
-    salesHistory: { type: [SaleSchema], default: [] }
+    defaultSellingPrice: { type: Number, required: true, min: 0 }, // a suggested price; actual sale can vary
+    sold: { type: Number, default: 0 }
   },
   { timestamps: true }
 );
 
-export default mongoose.model("Shoe", ShoeSchema);
+module.exports = mongoose.model("Shoe", ShoeSchema);
